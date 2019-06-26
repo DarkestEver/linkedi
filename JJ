@@ -1,0 +1,404 @@
+import random as rn
+import re
+from datetime import datetime
+import time
+import os
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+import zipfile
+import psycopg2
+import json
+
+
+############################################# db connections #####################################################
+def postgres_conn():
+    conn = psycopg2.connect(database="postgres",user="postgres")
+    return conn
+
+def validate_user_key(user_key):
+    conn = postgres_conn()
+    cursor = conn.cursor()
+    cursor.execute("select count(1) from linkedin.mysql_user  where  user_key='%s'" % (user_key))
+    row = cursor.fetchone()
+    if row[0] > 0:
+        cursor.execute("select count(1) from linkedin.settings  where  user_key='%s'" % (user_key))
+        row = cursor.fetchone()
+        id =  row['proxy_use'], row['search_engine'], row['email_notification']
+    else:
+        id = 0
+    conn.commit()
+    conn.close()
+    return id
+        
+
+def error_messages(error_type=''):
+    conn = postgres_conn()
+    cursor = conn.cursor()
+    cursor.execute("select error_messages from linkedin.error_messages  where  error_type='%s'" % (error_type))
+    row = cursor.fetchone()
+    conn.commit()
+    conn.close()
+    if type(None) != type(row):
+        return row[0]  
+    else:
+        return 'error message not found'
+
+
+
+def insertFromDict(table, dict):
+    """Take dictionary object dict and produce sql for 
+    inserting it into the named table"""
+    sql = 'INSERT INTO ' + table
+    sql += ' ('
+    sql += ', '.join(dict)
+    sql += ') VALUES ('
+    sql += ', '.join("'{!s}'".format(removesinglequote(val)) for (key,val) in dict.items())
+    sql += ');'
+    return sql
+
+def removesinglequote(val):
+    if type(val) == str:
+        val = val.replace("'","''")
+    return val
+
+def read_url():
+    global url_table,id
+    conn = postgres_conn()
+    print('read_url')
+    cursor = conn.cursor()
+    cursor.execute("select * from  %s where  status=%d limit 1" % (url_table,instant_id))
+    row = cursor.fetchone()
+    if type(None) != type(row):
+        id = row[0]
+        cursor.execute("UPDATE %s SET status=1 WHERE id = %d" % (url_table,id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return row
+
+def num_of_url():
+    global url_table,id
+    conn = postgres_conn()
+    print('num_of_url')
+    cursor = conn.cursor()
+    cursor.execute("select count(1) from  %s where  status= %d" % (url_table,instant_id))
+    row = cursor.fetchone()
+    conn.commit()
+    cursor.close()
+    print('num_of_url',row[0])
+    conn.close()
+    return row[0]    
+
+def linkedin_verified(id,searched_name,searched_job_title,searched_company,searched_linkedin_url):
+    global url_table
+    conn =postgres_conn()
+    print('update_url')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE %s SET status=2,searched_name =  '%s', searched_job_title  =  '%s' , searched_company = '%s' ,searched_linkedin_url = '%s',  is_verified = 1  WHERE id = %d" % (url_table,removesinglequote(searched_name),    removesinglequote(searched_job_title),removesinglequote(searched_company),removesinglequote(searched_linkedin_url), id)) 
+    #cursor.execute("UPDATE %s SET status=2,is_verified = 1  WHERE id = %d" % (url_table, id)) 
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def linkedin_not_verified(id):
+    global url_table
+    conn =postgres_conn()
+    print('update_url')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE %s SET status=2, is_verified = 0 WHERE id = %d" % (url_table,id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def insert_prospect_searched(dic):
+    conn =postgres_conn()
+    cursor = conn.cursor()
+    cursor.execute(insertFromDict('prospect_search_engine', dic))
+    conn.commit()
+    cursor.close()
+    conn.close()
+############################################## Proxy settings ####################################################
+
+dir_path = os.path.dirname(os.path.realpath(__file__))
+def main_chrome(exe_path,PROXY_HOST='',PROXY_PORT='',PROXY_USER='',PROXY_PASS='', headless = False):
+    manifest_json = """
+        {
+            "version": "1.0.0",
+            "manifest_version": 2,
+            "name": "Chrome Proxy",
+            "permissions": [
+                "proxy",
+                "tabs",
+                "unlimitedStorage",
+                "storage",
+                "<all_urls>",
+                "webRequest",
+                "webRequestBlocking"
+            ],
+            "background": {
+                "scripts": ["background.js"]
+            },
+            "minimum_chrome_version":"22.0.0"
+        }
+        """
+
+    background_js = """
+var config = {
+        mode: "fixed_servers",
+        rules: {
+          singleProxy: {
+            scheme: "http",
+            host: "%(host)s",
+            port: parseInt(%(port)d)
+          },
+          bypassList: ["foobar.com"]
+        }
+      };
+chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+function callbackFn(details) {
+    return {
+        authCredentials: {
+            username: "%(user)s",
+            password: "%(pass)s"
+        }
+    };
+}
+chrome.webRequest.onAuthRequired.addListener(
+            callbackFn,
+            {urls: ["<all_urls>"]},
+            ['blocking']
+);
+    """ % {
+        "host": PROXY_HOST,
+        "port": PROXY_PORT,
+        "user": PROXY_USER,
+        "pass": PROXY_PASS,
+    }
+
+
+    pluginfile = 'proxy_auth_plugin.zip'
+
+    with zipfile.ZipFile(pluginfile, 'w') as zp:
+        zp.writestr("manifest.json", manifest_json)
+        zp.writestr("background.js", background_js)
+
+    co = Options()
+    #co.binary_location = "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"
+    #disable-infobars
+    #co.add_extension(pluginfile)
+    
+    co.add_argument('--disable-gpu')  # applicable to windows os only
+    co.add_argument('start-maximized') # 
+    co.add_argument('disable-infobars')
+    co.add_argument('allow-running-insecure-content')
+    co.add_argument("test-type")
+    if PROXY_USER == '':
+        co.add_argument('--proxy-server=http://' + PROXY_HOST + ':' + str(PROXY_PORT))
+    else:
+        co.add_argument('--proxy-server=http://' +  PROXY_USER + ':' + PROXY_PASS + '@'  + PROXY_HOST + ':' + str(PROXY_PORT))
+    if headless == True:
+        co.add_argument("--headless") # Runs Chrome in headless mode.
+        co.add_argument('--no-sandbox') # Bypass OS security model
+    driver = webdriver.Chrome(exe_path,chrome_options=co)
+    driver.get("http://icanhazip.com")
+    print(driver.page_source)
+    return driver
+
+##################################################################################################
+
+
+
+
+def create_date_folder(path):
+    datetoday =path  + datetime.now().strftime('%Y/%m/%d')
+    if not os.path.exists(datetoday):
+        os.makedirs(datetoday)
+    return datetoday
+        
+
+def getDataByClass(driver_object, classname, _type="text"):
+    try:
+        if _type == "text":
+            return driver_object.find_element_by_class_name(classname).text.strip()
+        if _type == "click":
+            return driver_object.find_element_by_class_name(classname).click()
+        if _type == "href":
+            return driver_object.find_element_by_css_selector(classname).get_attribute('href').strip()
+        if _type == "sel_text":
+            return driver_object.find_element_by_css_selector(classname).text.strip()
+    except:
+        return ''
+
+
+def get_driver(executable_path,_PROXY_HOST='',_PROXY_PORT='',_USERNAME='',_PASSWORD='',  browser = 'firefox' ,
+               db = False , _url_table ="", _instant_id=0,_search_limit_url=100,_dir_path='', account_group='', headless = False):
+    global use_database,url_table,instant_id,search_limit_url, dir_path
+    use_database  = db
+    PROXY_HOST  = _PROXY_HOST
+    PROXY_PORT = _PROXY_PORT
+    USERNAME = _USERNAME
+    PASSWORD = _PASSWORD
+    search_limit_url = _search_limit_url
+        
+    if browser == 'chrome':
+        if PROXY_HOST != "":
+            chrome = main_chrome(executable_path,PROXY_HOST,PROXY_PORT,USERNAME,PASSWORD,headless)
+            return chrome
+        else:
+            chrome_options = webdriver.ChromeOptions()
+            chrome_options.add_argument('start-maximized')
+            chrome_options.add_argument('allow-running-insecure-content')
+            chrome_options.add_argument("test-type")
+            chrome_options.add_argument('disable-infobars')
+            chrome = webdriver.Chrome(executable_path=executable_path,chrome_options=chrome_options)
+            return chrome
+    if browser == 'firefox':
+        if PROXY_HOST != "":
+            print('pp')
+            profile = webdriver.FirefoxProfile()
+            profile.set_preference("network.proxy.type", 1)
+            profile.set_preference("network.proxy.http", PROXY_HOST)
+            profile.set_preference("network.proxy.http_port", PROXY_PORT)
+            profile.set_preference("network.proxy.socks_username", USERNAME)
+            profile.set_preference("network.proxy.socks_password", PASSWORD)
+            profile.set_preference("network.proxy.ssl", PROXY_HOST)
+            profile.set_preference("network.proxy.ssl_port", PROXY_PORT)
+            chrome = webdriver.Firefox(executable_path=executable_path, firefox_profile=profile)
+            return chrome
+        else:
+            chrome = webdriver.Firefox(executable_path=executable_path)
+            return chrome    
+        
+
+
+
+search_limit_url = 100
+dir_path = os.path.dirname(os.path.realpath(__file__))
+
+def linkedin_verification(driver, search_engine = 'bing', limited_search = 600):
+    driver.get('https://www.'+search_engine+'.com/')
+    time.sleep(5)
+    search_count = 0
+    while num_of_url() != 0 and search_count <= limited_search:
+        search_count = search_count + 1
+        valid = 0
+        row = read_url()
+        first_name = row[1].lower()
+        last_name =row[2].lower()
+        company_name = row[3].lower()
+        job_title = row[4].lower()
+        id = row[0]
+        linkedin_url = row[11]
+        search_text =''
+        linkedin_url_p = re.compile('com/in/(.*)/')
+        if first_name != '' and last_name != '' and company_name != '' and job_title != '':
+            try:
+                linkedin_url = linkedin_url_p.search(linkedin_url).group()
+                search_text = 'site:linkedin.com ' +  linkedin_url[3:]
+            except:
+                search_text = 'site:linkedin.com ' + '"'+first_name+'" + ' + '"'+last_name+'" + ' + '"'+company_name+'"' 
+    
+            if search_engine == 'bing':
+                bing_search(driver,search_text)
+            elif search_engine == 'google':
+                google_search(driver,search_text)
+                
+            time.sleep(2)
+            all_anchor_tags = driver.find_elements_by_xpath("//a")
+            for a in all_anchor_tags:
+                ori_title = a.get_attribute('text').lower()
+                new_linkedin_url = a.get_attribute('href')
+                if type(None) != type(new_linkedin_url) and 'linkedin.com/in/' in new_linkedin_url:
+                    title = ori_title.replace('| linkedin', '').replace('…','').replace(' ...','').replace('- linkedin','').replace('| ...','').strip().split('|')[0].strip()
+                    split_title = title.split(' - ')
+                    title = alphanumeric(title)
+                    if len(split_title) >= 3:
+                        searched_company_name = split_title[-1]
+                        len_searched_company_name = len(searched_company_name) - 1
+                        searching_company_name = company_name[:len_searched_company_name].strip()
+                        new_user_name = split_title[0]
+                        new_job_title = '-'.join( split_title[1:-1])
+                        new_company_name = split_title[-1] 
+                        if alphanumeric(first_name) in alphanumeric(new_user_name) and alphanumeric(last_name) in alphanumeric(new_user_name) and alphanumeric(job_title) in alphanumeric(new_job_title) and alphanumeric(searching_company_name) in alphanumeric(new_company_name):
+                            valid = 1
+                            linkedin_verified(id,new_user_name,new_job_title,new_company_name,new_linkedin_url )
+                            print('valid')    
+                        elif ' |' in ori_title:
+                            profile_info = {
+                                    'user_name':new_user_name,
+                                    'company_name':new_company_name,
+                                    'job_title':new_job_title,
+                                    'linkedin_url':new_linkedin_url
+                                    }
+                            insert_prospect_searched(profile_info)
+                            print('inserted new')
+        if  valid == 0:
+            linkedin_not_verified(id)
+            print('invalid')
+    if search_count >= limited_search:
+        driver.quit()
+    if num_of_url() == 0:
+        driver.quit()
+        return True
+                
+def alphanumeric(string):
+    return re.sub(r'([^\s\w]|_)+', '', string)
+
+def log_mesage(ssss):
+    print(ssss)
+
+def bing_search(driver,search_text):
+    driver.find_element_by_id('sb_form_q').clear()
+    for alphabets in search_text:
+        driver.find_element_by_id('sb_form_q').send_keys(alphabets)
+    time.sleep(rn.randint(2,20)*0.100)
+    sndbutton = driver.find_element_by_id("sb_form_go")
+    sndbutton.submit()
+
+def google_search(driver,search_text):
+    inputElement = driver.find_element_by_name("q")
+    inputElement.clear()
+    for alphabets in search_text:
+        inputElement.send_keys(alphabets)
+    time.sleep(rn.randint(2,20)*0.100)
+    inputElement.submit()  
+#######################################################################################
+   
+instant_id = 0
+url_table = 'linkedin_verify'
+dir_path = os.path.dirname(os.path.realpath(__file__))    
+f = open("keys.txt", "r") 
+user_key = f.read()   
+f.close()
+
+settings = validate_user_key(user_key)
+if  settings == 0 :
+    print(error_messages('user_key_not_valid'))
+elif num_of_url() == 0:
+    print(error_messages('no_active_account'))
+else:    
+    while True:   
+        try:
+            try:
+                driver = get_driver(dir_path + '\chromedriver.exe',
+                                        browser = 'chrome',
+                                        _PROXY_HOST= '',
+                                        _PROXY_PORT='',
+                                        _USERNAME='',
+                                        _PASSWORD='',
+                                        _url_table = url_table,
+                                        _instant_id = instant_id,
+                                        _search_limit_url = 10000,
+                                        _dir_path = dir_path,
+                                        db=False,
+                                        headless = False)  
+                is_search_completed = linkedin_verification(driver,'bing',10)
+                if is_search_completed:
+                    print(error_messages('no_active_account'))
+                    break
+            except Exception as e:
+                print("type error: " + str(e))
+                if type(None) != type(driver):
+                    driver.quit()
+        except:
+            pass
