@@ -8,27 +8,36 @@ from selenium.webdriver.chrome.options import Options
 import zipfile
 import psycopg2
 import json
+import urllib, json
+import getFreeProxies as frp
+import psycopg2.extras
+############################################## API Connections ####################################################
 
 
 ############################################# db connections #####################################################
 def postgres_conn():
-    conn = psycopg2.connect(database="postgres",user="postgres")
+    conn = psycopg2.connect(database="postgres",user="postgres",password='Postgres@root',host='173.249.21.142')
     return conn
 
 def validate_user_key(user_key):
     conn = postgres_conn()
-    cursor = conn.cursor()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute("select count(1) from linkedin.mysql_user  where  user_key='%s'" % (user_key))
     row = cursor.fetchone()
     if row[0] > 0:
-        cursor.execute("select count(1) from linkedin.settings  where  user_key='%s'" % (user_key))
-        row = cursor.fetchone()
-        id =  row['proxy_use'], row['search_engine'], row['email_notification']
+        cursor.execute("select * from linkedin.settings  where  user_key='%s'" % (user_key))
+        ans =cursor.fetchall()
+        ans1 = []
+        for rossw in ans:
+            ans1.append(dict(rossw))
+        id =  ans1
     else:
         id = 0
     conn.commit()
     conn.close()
     return id
+
+
         
 
 def error_messages(error_type=''):
@@ -42,7 +51,6 @@ def error_messages(error_type=''):
         return row[0]  
     else:
         return 'error message not found'
-
 
 
 def insertFromDict(table, dict):
@@ -65,27 +73,29 @@ def read_url():
     global url_table,id
     conn = postgres_conn()
     print('read_url')
-    cursor = conn.cursor()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute("select * from  %s where  status=%d limit 1" % (url_table,instant_id))
-    row = cursor.fetchone()
-    if type(None) != type(row):
-        id = row[0]
+    ans =cursor.fetchall()
+    if type(None) != type(ans):
+        ans1 = []
+        for rossw in ans:
+            ans1.append(dict(rossw))
+        id = ans[0][1]
         cursor.execute("UPDATE %s SET status=1 WHERE id = %d" % (url_table,id))
     conn.commit()
     cursor.close()
     conn.close()
-    return row
+    return ans1
 
 def num_of_url():
     global url_table,id
     conn = postgres_conn()
-    print('num_of_url')
     cursor = conn.cursor()
-    cursor.execute("select count(1) from  %s where  status= %d" % (url_table,instant_id))
+    cursor.execute("select count(1) from  linkedin.user_account_list where  status= 0 ")
     row = cursor.fetchone()
     conn.commit()
     cursor.close()
-    print('num_of_url',row[0])
+    print('remaining account',row[0])
     conn.close()
     return row[0]    
 
@@ -110,10 +120,20 @@ def linkedin_not_verified(id):
     cursor.close()
     conn.close()
 
+def linkedin_extraction_change_status(id):
+    global url_table
+    conn =postgres_conn()
+    print('update_url')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE %s SET status=1 WHERE id = %d" % (url_table,id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    
 def insert_prospect_searched(dic):
     conn =postgres_conn()
     cursor = conn.cursor()
-    cursor.execute(insertFromDict('prospect_search_engine', dic))
+    cursor.execute(insertFromDict('linkedin.prospect_search_engine', dic))
     conn.commit()
     cursor.close()
     conn.close()
@@ -275,37 +295,33 @@ def get_driver(executable_path,_PROXY_HOST='',_PROXY_PORT='',_USERNAME='',_PASSW
 search_limit_url = 100
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
-def linkedin_verification(driver, search_engine = 'bing', limited_search = 600):
-    driver.get('https://www.'+search_engine+'.com/')
+
+def linkedin_find_prospect(driver, search_engine , result_class_name = '.b_algo', limited_search = 10, ip_address = ''):
+    driver.get(search_engine)
     time.sleep(5)
     search_count = 0
     while num_of_url() != 0 and search_count <= limited_search:
         search_count = search_count + 1
-        valid = 0
         row = read_url()
-        first_name = row[1].lower()
-        last_name =row[2].lower()
-        company_name = row[3].lower()
-        job_title = row[4].lower()
-        id = row[0]
-        linkedin_url = row[11]
-        search_text =''
-        linkedin_url_p = re.compile('com/in/(.*)/')
-        if first_name != '' and last_name != '' and company_name != '' and job_title != '':
-            try:
-                linkedin_url = linkedin_url_p.search(linkedin_url).group()
-                search_text = 'site:linkedin.com ' +  linkedin_url[3:]
-            except:
-                search_text = 'site:linkedin.com ' + '"'+first_name+'" + ' + '"'+last_name+'" + ' + '"'+company_name+'"' 
-    
-            if search_engine == 'bing':
-                bing_search(driver,search_text)
-            elif search_engine == 'google':
-                google_search(driver,search_text)
+        company_name = row[0]['company_name']
+        job_title = row[0]['job_title']
+        domain_name = row[0]['domain_name']
+        account_list_id = row[0]['account_list_id']
+        id = row[0]['id']
+        company_link = ''
+        if type(None) != type(domain_name):
+            company_list = bing_company_name_search_by_domain(domain_name, driver,result_class_name)
+            company_name =  company_list[0]
+            company_link =  company_list[1]
+        if  company_name != '' and job_title != '':
+            search_text = 'site:https://linkedin.com/in/ "' + job_title + '" + '+company_name
+            search_engine_select(driver,search_text)
+            time.sleep(5)
+            all_search_results = driver.find_elements_by_css_selector(result_class_name)
+            for r in all_search_results:
+                #industry ,  location = ind_loc(r)
                 
-            time.sleep(2)
-            all_anchor_tags = driver.find_elements_by_xpath("//a")
-            for a in all_anchor_tags:
+                a = r.find_element_by_tag_name('a')
                 ori_title = a.get_attribute('text').lower()
                 new_linkedin_url = a.get_attribute('href')
                 if type(None) != type(new_linkedin_url) and 'linkedin.com/in/' in new_linkedin_url:
@@ -319,22 +335,37 @@ def linkedin_verification(driver, search_engine = 'bing', limited_search = 600):
                         new_user_name = split_title[0]
                         new_job_title = '-'.join( split_title[1:-1])
                         new_company_name = split_title[-1] 
-                        if alphanumeric(first_name) in alphanumeric(new_user_name) and alphanumeric(last_name) in alphanumeric(new_user_name) and alphanumeric(job_title) in alphanumeric(new_job_title) and alphanumeric(searching_company_name) in alphanumeric(new_company_name):
-                            valid = 1
-                            linkedin_verified(id,new_user_name,new_job_title,new_company_name,new_linkedin_url )
-                            print('valid')    
-                        elif ' |' in ori_title:
+                        if ' |' in ori_title:
                             profile_info = {
                                     'user_name':new_user_name,
                                     'company_name':new_company_name,
                                     'job_title':new_job_title,
-                                    'linkedin_url':new_linkedin_url
+                                    'linkedin_url':new_linkedin_url,
+                                    'domain_name' : domain_name,
+                                    'company_linkedin_url' : company_link,
+                                    'account_list_id': account_list_id,
+                                    'ip_address':ip_address
+                                    #'industry':industry,
+                                    #'location' :location 
                                     }
                             insert_prospect_searched(profile_info)
                             print('inserted new')
-        if  valid == 0:
-            linkedin_not_verified(id)
-            print('invalid')
+                        elif alphanumeric(searching_company_name) in alphanumeric(new_company_name):
+                            profile_info = {
+                                    'user_name':new_user_name,
+                                    'company_name':company_name,
+                                    'job_title':new_job_title,
+                                    'linkedin_url':new_linkedin_url,
+                                    'domain_name' : domain_name,
+                                    'company_linkedin_url' : company_link,
+                                    'account_list_id': account_list_id,
+                                    'ip_address':ip_address
+                                    #'industry':industry,
+                                    #'location' :location
+                                    }
+                            insert_prospect_searched(profile_info)
+                            print('inserted new same company profile')
+        linkedin_extraction_change_status(id)
     if search_count >= limited_search:
         driver.quit()
     if num_of_url() == 0:
@@ -347,6 +378,21 @@ def alphanumeric(string):
 def log_mesage(ssss):
     print(ssss)
 
+def bing_company_name_search_by_domain(domain_name, driver, class_name):
+    if domain_name != '':
+        search_text = 'site:https://www.linkedin.com/company/ ' + '"' + domain_name + '"'
+        search_engine_select(driver,search_text)
+        first_linkedin_company_name  = ''
+        try:
+            first_linkedin_company_name  = driver.find_elements_by_css_selector(class_name)[0]
+            a = first_linkedin_company_name.find_element_by_tag_name('a')
+            company_name = a.get_attribute('text').lower().split(' | ')[0]
+            company_name_linkedin_url = a.get_attribute('href')
+            return company_name, company_name_linkedin_url
+        except:
+            return '', ''
+    
+
 def bing_search(driver,search_text):
     driver.find_element_by_id('sb_form_q').clear()
     for alphabets in search_text:
@@ -354,6 +400,7 @@ def bing_search(driver,search_text):
     time.sleep(rn.randint(2,20)*0.100)
     sndbutton = driver.find_element_by_id("sb_form_go")
     sndbutton.submit()
+    time.sleep(rn.randint(2,20)*0.100)
 
 def google_search(driver,search_text):
     inputElement = driver.find_element_by_name("q")
@@ -362,39 +409,82 @@ def google_search(driver,search_text):
         inputElement.send_keys(alphabets)
     time.sleep(rn.randint(2,20)*0.100)
     inputElement.submit()  
+
+def search_engine_select(driver,search_text):
+    if   'bing' in search_engine:
+                bing_search(driver,search_text)
+    elif  'google'  in search_engine:
+                google_search(driver,search_text)
+    elif   'duckduckgo'  in search_engine:
+                google_search(driver,search_text)
+    
 #######################################################################################
-   
+
+  
 instant_id = 0
-url_table = 'linkedin_verify'
+url_table = 'linkedin.linkedin_verify'
 dir_path = os.path.dirname(os.path.realpath(__file__))    
 f = open("keys.txt", "r") 
 user_key = f.read()   
 f.close()
+
 
 settings = validate_user_key(user_key)
 if  settings == 0 :
     print(error_messages('user_key_not_valid'))
 elif num_of_url() == 0:
     print(error_messages('no_active_account'))
-else:    
+else:
+    proxy_enabled = settings[0]['proxy_use']
+    email_notification = settings[0]['email_notification']
+    search_engine_details =  settings[0]['search_engine'].split('::')
+    search_engine =search_engine_details[0] 
+    result_class_name = search_engine_details[1] 
+    ip_rotation_count = settings[0]['ip_rotation_count']
+    browser_visibility = settings[0]['browser_visibility']
+    if proxy_enabled == 'free':
+        proxy = frp.checkIfProxyWorking()
+        ip_address = proxy['ip']
+        ip_port = proxy['port']
+        ip_username = ''
+        ip_password = ''
+    elif proxy_enabled == 'paid':
+        proxy = frp.checkIfProxyWorking()
+        ip_address = proxy['ip']
+        ip_port = proxy['port']
+        ip_username = proxy['username']
+        ip_password = proxy['password']
+    elif proxy_enabled == 'no':
+        ip_address = ''
+        ip_port  = ''
+        ip_username  = ''
+        ip_password  = '' 
+    
+    
+"""
     while True:   
         try:
             try:
                 driver = get_driver(dir_path + '\chromedriver.exe',
                                         browser = 'chrome',
-                                        _PROXY_HOST= '',
-                                        _PROXY_PORT='',
-                                        _USERNAME='',
-                                        _PASSWORD='',
+                                        _PROXY_HOST= ip_address,
+                                        _PROXY_PORT=ip_port,
+                                        _USERNAME=ip_username,
+                                        _PASSWORD=ip_password,
                                         _url_table = url_table,
                                         _instant_id = instant_id,
-                                        _search_limit_url = 10000,
+                                        _search_limit_url = ip_rotation_count,
                                         _dir_path = dir_path,
                                         db=False,
-                                        headless = False)  
-                is_search_completed = linkedin_verification(driver,'bing',10)
+                                        headless = browser_visibility)  
+                ip_address = ip_address + ':' + str(ip_port)
+                is_search_completed = linkedin_find_prospect(driver,search_engine = search_engine, 
+                                                            result_class_name = result_class_name,
+                                                            limited_search = ip_rotation_count, 
+                                                            ip_address=ip_address)
                 if is_search_completed:
                     print(error_messages('no_active_account'))
+                    driver.quit()
                     break
             except Exception as e:
                 print("type error: " + str(e))
@@ -402,3 +492,4 @@ else:
                     driver.quit()
         except:
             pass
+"""
