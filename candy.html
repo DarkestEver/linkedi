@@ -1,0 +1,147 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <base href="https://demos.telerik.com/kendo-ui/dragdrop/area">
+    <style>html { font-size: 14px; font-family: Arial, Helvetica, sans-serif; }</style>
+    <title></title>
+    <link rel="stylesheet" href="https://kendo.cdn.telerik.com/2019.3.1023/styles/kendo.default-v2.min.css" />
+
+    <script src="https://kendo.cdn.telerik.com/2019.3.1023/js/jquery.min.js"></script>
+    <script src="https://kendo.cdn.telerik.com/2019.3.1023/js/kendo.all.min.js"></script>
+    
+
+</head>
+<body>
+<div id="example">
+    
+    <div class="demo-section k-content" >
+        <div id="droptarget">
+            <div class="test1">
+            Drop heree!@@
+
+            </div>
+            <div class="test2">
+                 
+
+            </div>
+        </div>
+
+    </div>
+    <div id="draggable">
+            
+            
+        </div>
+
+    <script>
+        function draggableOnDragStart(e) {
+            $("#draggable").addClass("hollow");
+     
+        }
+
+        function droptargetOnDragEnter(e) {
+            $(e.dropTarget).text("Now you can drop it.");
+        }
+
+        function droptargetOnDragLeave(e) {
+            $(e.dropTarget).text("(Drop here)");
+        }
+        
+
+        function droptargetOnDrop(e) {
+            $(e.dropTarget).text("You did great!");
+            $('<div class="test2">... Or here.</div>').insertAfter(e.dropTarget);
+            $(e.dropTarget).append("<br/><table style='border:1px solid black; font-size:10px;'><tr><th>Name</th><th>Country</th><th>Experience</th><th>Technologies</th></tr><tr><td>  Bhanu Pratap   </td><td> India </td><td>  3 years   </td><td>  Javascript,Jquery,AngularJS,ASP.NET C#, XML,HTML,CSS,Telerik,XSLT,AJAX,etc...</td></tr><tr><td><img alt='Driving has never been this rewarding.'  src='https://image.mkt.grab.com/lib/fe3a15707564067f751c78/m/7/55b7368d-c41e-4a65-8e34-db73ea0c3e34.png' style='height: auto; width: 600px;' title='Driving has never been this rewarding.' width='600'></td></tr></table>");
+
+          
+             $("#draggable").removeClass("hollow"); 
+        }
+
+        function draggableOnDragEnd(e) {
+            var draggable = $("#draggable");
+
+            if (!draggable.data("kendoDraggable").dropped) {
+                // drag ended outside of any droptarget
+                $("#droptarget").html("<div class='test1'>(Try again)</div><div class='test2'>(Try again)</div>");
+            }
+
+             draggable.removeClass("hollow"); 
+        }
+
+        $(document).ready(function() {
+            $("#draggable").kendoDraggable({
+                hint: function() {
+                    return $("#draggable").clone();
+                },
+                dragstart: draggableOnDragStart,
+                dragend: draggableOnDragEnd
+            });
+
+            $("#droptarget").kendoDropTargetArea({
+                filter: ".test1, .test2",
+                dragenter: droptargetOnDragEnter,
+               dragleave: droptargetOnDragLeave, 
+                drop: droptargetOnDrop 
+            });
+        });
+    </script>
+
+    <style>
+        .demo-section {
+            padding-top: 100px;
+            position: relative;
+        }
+        
+        #draggable {
+            cursor: move;
+            position: absolute;
+            top: 30px;
+            left: 50%;
+            margin-left: -28px;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background-color: #03a9f4;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.23), 0 3px 10px rgba(0, 0, 0, 0.16);
+        }
+
+        #droptarget {
+            padding: 20px;
+            cursor: default;
+            vertical-align: middle;
+            text-align: center;
+            border: 2px dotted #ccc;
+        }
+
+        .test1,
+        .test2 {
+            vertical-align: middle;
+            display: inline-block;
+            width: 100px;
+            height: 100px;
+            line-height: 1.5em;
+            margin: 10px;
+            padding: 20px;
+            font-size: 14px;
+            font-weight: normal;
+            color: #fff;
+        }
+        .test1 {
+            background-color: #3f51b5;
+        }
+        .test2 {
+            background-color: #ee6f0b;
+        }
+
+        *+html .test1,
+        *+html .test2 {
+            margin-top: 50px;
+            display: inline;
+            zoom: 1;
+        }
+    </style>
+</div>
+
+
+</body>
+</html>
